@@ -1,169 +1,247 @@
 #include <GL/glut.h>
 #include <cmath>
-#include <iostream>
+#include <vector>
+#include <fstream>
+#include <string>
 using namespace std;
 
-int figuraSeleccionada = 1;
-int x1_, y1_, x2_, y2_;
-bool primerClick = true;
-float color[3] = {0,0,0};
-int grosor = 1;
 
-void drawPixel(int x, int y) {
+enum Alg { LINE_DIRECT };
+
+struct Figura {
+    Alg alg;
+    int x1, y1, x2, y2;
+    float color[3];
+    float grosor;
+};
+
+vector<Figura> figuras;
+int winW = 800, winH = 600;
+Alg algoritmoActual = LINE_DIRECT;
+float colorActual[3] = {0, 0, 0};
+float grosorActual = 1.0f;
+int clickCount = 0;
+int tempX1, tempY1;
+bool showGrid = true, showAxes = true, showCoords = false;
+int gridSpacing = 25;
+int mouseX = 0, mouseY = 0;
+int capturaCount = 1;
+
+
+void exportToPPM(const string& filenameBase) {
+    string filename = filenameBase + to_string(capturaCount++) + ".ppm";
+    vector<unsigned char> pixels(3 * winW * winH);
+    glReadPixels(0, 0, winW, winH, GL_RGB, GL_UNSIGNED_BYTE, pixels.data());
+
+    ofstream out(filename, ios::binary);
+    if (!out) {
+        printf("Error: no se pudo crear el archivo\n");
+        return;
+    }
+
+    out << "P6\n" << winW << " " << winH << "\n255\n";
+    out.write((char*)pixels.data(), pixels.size());
+    out.close();
+
+    printf("Imagen exportada: %s\n", filename.c_str());
+}
+
+
+void keyboard(unsigned char key, int x, int y) {
+    switch(key) {
+        case 'g': case 'G': showGrid = !showGrid; glutPostRedisplay(); break;
+        case 'e': case 'E': showAxes = !showAxes; glutPostRedisplay(); break;
+        case 'c': case 'C': figuras.clear(); glutPostRedisplay(); break;
+        case 's': case 'S': exportToPPM("captura"); break;
+    }
+}
+
+
+void drawText(int x, int y, const string& text){
+    glColor3f(0,0,0);
+    glRasterPos2i(x,y);
+    for(char c: text) glutBitmapCharacter(GLUT_BITMAP_8_BY_13,c);
+}
+void putPixel(int x,int y,float r,float g,float b,float grosor){
+    glColor3f(r,g,b);
+    glPointSize(grosor);
     glBegin(GL_POINTS);
-    glVertex2i(x, y);
+    glVertex2i(x,y);
     glEnd();
 }
 
-void lineaDirecta(int x1, int y1, int x2, int y2) {
-    if (x1 == x2) {
-        for (int y = min(y1,y2); y <= max(y1,y2); y++) drawPixel(x1, y);
+
+void drawLineDirect(int x1,int y1,int x2,int y2,float r,float g,float b,float grosor){
+    if(x1==x2){
+        for(int y=min(y1,y2); y<=max(y1,y2); y++) putPixel(x1,y,r,g,b,grosor);
         return;
     }
-    float m = float(y2 - y1) / float(x2 - x1);
-    float b = y1 - m * x1;
-    if (fabs(m) <= 1) {
-        for (int x = min(x1,x2); x <= max(x1,x2); x++) {
-            int y = round(m * x + b);
-            drawPixel(x, y);
-        }
+    float m=(float)(y2-y1)/(x2-x1);
+    if(fabs(m)<=1){
+        float b0 = y1 - m*x1;
+        for(int x=min(x1,x2); x<=max(x1,x2); x++) putPixel(x,(int)round(m*x+b0),r,g,b,grosor);
     } else {
-        for (int y = min(y1,y2); y <= max(y1,y2); y++) {
-            int x = round((y - b) / m);
-            drawPixel(x, y);
-        }
+        for(int y=min(y1,y2); y<=max(y1,y2); y++) putPixel((int)round((y-y1)/m+x1),y,r,g,b,grosor);
     }
 }
 
-void lineaDDA(int x1, int y1, int x2, int y2) {
-    int dx = x2 - x1, dy = y2 - y1;
-    int steps = max(abs(dx), abs(dy));
-    float xInc = dx / (float)steps, yInc = dy / (float)steps;
-    float x = x1, y = y1;
-    for (int i = 0; i <= steps; i++) {
-        drawPixel(round(x), round(y));
-        x += xInc; y += yInc;
-    }
+
+void drawAxes(){
+    glColor3f(0.7,0.7,0.7);
+    glBegin(GL_LINES);
+    glVertex2i(0,winH/2); glVertex2i(winW,winH/2);
+    glVertex2i(winW/2,0); glVertex2i(winW/2,winH);
+    glEnd();
+}
+void drawGrid(){
+    glColor3f(0.85,0.85,0.85);
+    glBegin(GL_LINES);
+    for(int x=0;x<=winW;x+=gridSpacing){ glVertex2i(x,0); glVertex2i(x,winH); }
+    for(int y=0;y<=winH;y+=gridSpacing){ glVertex2i(0,y); glVertex2i(winW,y); }
+    glEnd();
 }
 
-void circuloPuntoMedio(int xc, int yc, int r) {
-    int x = 0, y = r, p = 1 - r;
-    while (x <= y) {
-        drawPixel(xc + x, yc + y); drawPixel(xc - x, yc + y);
-        drawPixel(xc + x, yc - y); drawPixel(xc - x, yc - y);
-        drawPixel(xc + y, yc + x); drawPixel(xc - y, yc + x);
-        drawPixel(xc + y, yc - x); drawPixel(xc - y, yc - x);
-        if (p < 0) p += 2*x + 3;
-        else { p += 2*(x - y) + 5; y--; }
-        x++;
-    }
-}
 
-void elipsePuntoMedio(int xc, int yc, int rx, int ry) {
-    float dx, dy, d1, d2, x=0, y=ry;
-    d1 = (ry*ry) - (rx*rx*ry) + (0.25*rx*rx);
-    dx = 2*ry*ry*x; dy = 2*rx*rx*y;
-
-    while (dx < dy) {
-        drawPixel(xc+x, yc+y); drawPixel(xc-x, yc+y);
-        drawPixel(xc+x, yc-y); drawPixel(xc-x, yc-y);
-        if (d1 < 0) { x++; dx += 2*ry*ry; d1 += dx + (ry*ry); }
-        else { x++; y--; dx += 2*ry*ry; dy -= 2*rx*rx; d1 += dx - dy + (ry*ry); }
-    }
-
-    d2 = (ry*ry)*((x+0.5)*(x+0.5)) + (rx*rx)*((y-1)*(y-1)) - (rx*rx*ry*ry);
-    while (y >= 0) {
-        drawPixel(xc+x, yc+y); drawPixel(xc-x, yc+y);
-        drawPixel(xc+x, yc-y); drawPixel(xc-x, yc-y);
-        if (d2 > 0) { y--; dy -= 2*rx*rx; d2 += (rx*rx) - dy; }
-        else { y--; x++; dx += 2*ry*ry; dy -= 2*rx*rx; d2 += dx - dy + (rx*rx); }
-    }
-}
-
-void display() {
+void display(){
     glClear(GL_COLOR_BUFFER_BIT);
+    if(showGrid) drawGrid();
+    if(showAxes) drawAxes();
+    for(auto &f: figuras){
+        if(f.alg == LINE_DIRECT)
+            drawLineDirect(f.x1,f.y1,f.x2,f.y2,f.color[0],f.color[1],f.color[2],f.grosor);
+    }
+    if(showCoords){
+        string coords = "X=" + to_string(mouseX) + " Y=" + to_string(mouseY);
+        drawText(10,winH-20,coords);
+    }
     glFlush();
 }
 
-void mouse(int button, int state, int x, int y) {
-    if (button == GLUT_LEFT_BUTTON && state == GLUT_DOWN) {
-        if (primerClick) {
-            x1_ = x; y1_ = 600 - y; primerClick = false;
-        } else {
-            x2_ = x; y2_ = 600 - y; primerClick = true;
-            glColor3f(color[0], color[1], color[2]);
-            glPointSize(grosor);
-            switch (figuraSeleccionada) {
-                case 1: lineaDirecta(x1_, y1_, x2_, y2_); break;
-                case 2: lineaDDA(x1_, y1_, x2_, y2_); break;
-                case 3: {
-                    int r = sqrt(pow(x2_-x1_,2) + pow(y2_-y1_,2));
-                    circuloPuntoMedio(x1_, y1_, r); break;
-                }
-                case 4: {
-                    int rx = abs(x2_-x1_), ry = abs(y2_-y1_);
-                    elipsePuntoMedio(x1_, y1_, rx, ry); break;
-                }
-            }
-            glFlush();
+
+void mouse(int button,int state,int x,int y){
+    if(button==GLUT_LEFT_BUTTON && state==GLUT_DOWN){
+        if(clickCount==0){ tempX1=x; tempY1=winH-y; clickCount=1; }
+        else{
+            Figura f;
+            f.alg=algoritmoActual;
+            f.x1=tempX1; f.y1=tempY1;
+            f.x2=x; f.y2=winH-y;
+            f.color[0]=colorActual[0]; f.color[1]=colorActual[1]; f.color[2]=colorActual[2];
+            f.grosor=grosorActual;
+            figuras.push_back(f);
+            clickCount=0;
+            glutPostRedisplay();
         }
     }
 }
+void motion(int x,int y){
+    mouseX=x; mouseY=winH-y;
+    if(showCoords) glutPostRedisplay();
+}
 
-void menuFiguras(int option) { figuraSeleccionada = option; }
-void menuColor(int option) {
-    switch(option) {
-        case 1: color[0]=0; color[1]=0; color[2]=0; break;
-        case 2: color[0]=1; color[1]=0; color[2]=0; break;
-        case 3: color[0]=0; color[1]=1; color[2]=0; break;
-        case 4: color[0]=0; color[1]=0; color[2]=1; break;
+
+void menuAlg(int op){ algoritmoActual=(Alg)op; }
+void menuColor(int op){
+    switch(op){
+        case 0: colorActual[0]=0; colorActual[1]=0; colorActual[2]=0; break;
+        case 1: colorActual[0]=1; colorActual[1]=0; colorActual[2]=0; break;
+        case 2: colorActual[0]=0; colorActual[1]=1; colorActual[2]=0; break;
+        case 3: colorActual[0]=0; colorActual[1]=0; colorActual[2]=1; break;
+        case 4: colorActual[0]=1; colorActual[1]=1; colorActual[2]=0; break;
     }
 }
-void menuGrosor(int option) { grosor = option; }
-void menuPrincipal(int option) {
-    if (option == 1) { glClear(GL_COLOR_BUFFER_BIT); glFlush(); }
+void menuGrosor(int op){
+    if(op==1) grosorActual=1;
+    if(op==2) grosorActual=2;
+    if(op==3) grosorActual=3;
+    if(op==5) grosorActual=5;
+}
+void menuVista(int op){
+    if(op==0) showGrid=!showGrid;
+    if(op==1) showAxes=!showAxes;
+    if(op==2) showCoords=!showCoords;
+    glutPostRedisplay();
+}
+void menuHerr(int op){
+    if(op==0) figuras.clear();
+    if(op==1 && !figuras.empty()) figuras.pop_back();
+    if(op==2) exportToPPM("captura");
+    glutPostRedisplay();
+}
+void menuAyuda(int opcion) {
+    switch(opcion) {
+        case 0:
+            printf("Atajos:\n");
+            printf("G = mostrar/ocultar cuadricula\n");
+            printf("E = mostrar/ocultar ejes\n");
+            printf("C = limpiar todas las figuras\n");
+            printf("S = Exportar imagen\n");
+            break;
+        case 1:
+            printf("Editor 2D con OpenGL & GLUT\n");
+            printf("Hecho por [Tu Nombre]\n");
+            break;
+    }
 }
 
-void init() { glClearColor(1,1,1,1); gluOrtho2D(0,800,0,600); }
+void createMenu(){
+    int menuDibujo=glutCreateMenu(menuAlg);
+    glutAddMenuEntry("Recta Directa",LINE_DIRECT);
 
-void initMenu() {
-    int submenuFig = glutCreateMenu(menuFiguras);
-    glutAddMenuEntry("Recta Directa", 1);
-    glutAddMenuEntry("Recta DDA", 2);
-    glutAddMenuEntry("Circulo Punto Medio", 3);
-    glutAddMenuEntry("Elipse Punto Medio", 4);
+    int menuColorId=glutCreateMenu(menuColor);
+    glutAddMenuEntry("Negro",0);
+    glutAddMenuEntry("Rojo",1);
+    glutAddMenuEntry("Verde",2);
+    glutAddMenuEntry("Azul",3);
+    glutAddMenuEntry("Amarillo",4);
 
-    int submenuCol = glutCreateMenu(menuColor);
-    glutAddMenuEntry("Negro", 1);
-    glutAddMenuEntry("Rojo", 2);
-    glutAddMenuEntry("Verde", 3);
-    glutAddMenuEntry("Azul", 4);
+    int menuGrosorId=glutCreateMenu(menuGrosor);
+    glutAddMenuEntry("1 px",1);
+    glutAddMenuEntry("2 px",2);
+    glutAddMenuEntry("3 px",3);
+    glutAddMenuEntry("5 px",5);
 
-    int submenuGro = glutCreateMenu(menuGrosor);
-    glutAddMenuEntry("1 px", 1);
-    glutAddMenuEntry("2 px", 2);
-    glutAddMenuEntry("3 px", 3);
-    glutAddMenuEntry("5 px", 5);
+    int menuVistaId=glutCreateMenu(menuVista);
+    glutAddMenuEntry("Cuadricula on/off",0);
+    glutAddMenuEntry("Ejes on/off",1);
+    glutAddMenuEntry("Coordenadas puntero on/off",2);
 
-    glutCreateMenu(menuPrincipal);
-    glutAddSubMenu("Dibujo", submenuFig);
-    glutAddSubMenu("Color", submenuCol);
-    glutAddSubMenu("Grosor", submenuGro);
-    glutAddMenuEntry("Limpiar", 1);
+    int menuHerrId=glutCreateMenu(menuHerr);
+    glutAddMenuEntry("Limpiar",0);
+    glutAddMenuEntry("Borrar ultima figura",1);
+    glutAddMenuEntry("Exportar PPM",2);
+
+    int menuAyudaId=glutCreateMenu(menuAyuda);
+    glutAddMenuEntry("Atajos",0);
+    glutAddMenuEntry("Acerca de",1);
+
+    int menu=glutCreateMenu([](int){});
+    glutAddSubMenu("Dibujo",menuDibujo);
+    glutAddSubMenu("Color",menuColorId);
+    glutAddSubMenu("Grosor",menuGrosorId);
+    glutAddSubMenu("Vista",menuVistaId);
+    glutAddSubMenu("Herramientas",menuHerrId);
+    glutAddSubMenu("Ayuda",menuAyudaId);
 
     glutAttachMenu(GLUT_RIGHT_BUTTON);
 }
 
-int main(int argc, char** argv) {
-    glutInit(&argc, argv);
-    glutInitDisplayMode(GLUT_SINGLE | GLUT_RGB);
-    glutInitWindowSize(800,600);
-    glutInitWindowPosition(100,100);
+void init(){
+    glClearColor(1,1,1,1);
+    gluOrtho2D(0,winW,0,winH);
+}
+
+int main(int argc,char**argv){
+    glutInit(&argc,argv);
+    glutInitDisplayMode(GLUT_SINGLE|GLUT_RGB);
+    glutInitWindowSize(winW,winH);
     glutCreateWindow("PixelCAD");
     init();
+    createMenu();
+    glutKeyboardFunc(keyboard);
     glutDisplayFunc(display);
     glutMouseFunc(mouse);
-    initMenu();
+    glutPassiveMotionFunc(motion);
     glutMainLoop();
     return 0;
 }
